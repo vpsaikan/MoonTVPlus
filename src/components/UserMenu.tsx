@@ -275,10 +275,11 @@ export const UserMenu: React.FC = () => {
   }, []);
 
   // 懒加载订阅 URL - 只在打开订阅面板时请求
-  const fetchSubscribeUrl = async () => {
+  const fetchSubscribeUrl = async (adFilter?: boolean) => {
     try {
       const currentOrigin = window.location.origin;
-      const response = await fetch(`/api/tvbox/config?origin=${encodeURIComponent(currentOrigin)}&adFilter=${adFilterEnabled}`);
+      const filterValue = adFilter !== undefined ? adFilter : adFilterEnabled;
+      const response = await fetch(`/api/tvbox/config?origin=${encodeURIComponent(currentOrigin)}&adFilter=${filterValue}`);
       if (response.ok) {
         const data = await response.json();
         setSubscribeUrl(data.url);
@@ -588,8 +589,8 @@ export const UserMenu: React.FC = () => {
 
   const handleAdFilterToggle = async (checked: boolean) => {
     setAdFilterEnabled(checked);
-    // 当去广告开关改变时,重新获取订阅URL
-    await fetchSubscribeUrl();
+    // 当去广告开关改变时,重新获取订阅URL，传入新的值
+    await fetchSubscribeUrl(checked);
   };
 
   const handleCopySubscribeUrl = async () => {
