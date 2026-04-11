@@ -5,7 +5,6 @@ const crypto = require('crypto');
 
 const MIGRATIONS_DIR = path.join(__dirname, '../migrations');
 
-// SHA-256 加密密码（与 Redis 保持一致）
 function hashPassword(password) {
   return crypto.createHash('sha256').update(password).digest('hex');
 }
@@ -27,16 +26,6 @@ function configureDatabase(db) {
   db.pragma('busy_timeout = 5000');
 }
 
-function ensureMigrationTable(db) {
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS schema_migrations (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      filename TEXT NOT NULL UNIQUE,
-      applied_at INTEGER NOT NULL
-    )
-  `);
-}
-
 function getMigrationFiles() {
   if (!fs.existsSync(MIGRATIONS_DIR)) {
     throw new Error(`Migrations directory not found: ${MIGRATIONS_DIR}`);
@@ -48,63 +37,33 @@ function getMigrationFiles() {
     .sort((a, b) => a.localeCompare(b));
 }
 
-function columnExists(db, tableName, columnName) {
-  const columns = db.prepare(`PRAGMA table_info(${tableName})`).all();
-  return columns.some((column) => column.name === columnName);
-}
-
-function migrationAlreadySatisfied(db, file) {
-  if (file === '003_add_new_episodes_to_play_records.sql') {
-    return columnExists(db, 'play_records', 'new_episodes');
-  }
-
-  if (file === '004_add_tvbox_subscribe_token.sql') {
-    return columnExists(db, 'users', 'tvbox_subscribe_token');
-  }
-
-  return false;
-}
-
-function markMigrationApplied(db, file) {
-  db.prepare(
-    'INSERT OR IGNORE INTO schema_migrations (filename, applied_at) VALUES (?, ?)'
-  ).run(file, Date.now());
+function isIgnorableMigrationError(error) {
+  const message = error instanceof Error ? error.message : String(error || '');
+  return (
+    message.includes('table') && message.includes('already exists') ||
+    message.includes('index') && message.includes('already exists') ||
+    message.includes('duplicate column name')
+  );
 }
 
 function runMigrations(db) {
-  ensureMigrationTable(db);
-
-  const applied = new Set(
-    db.prepare('SELECT filename FROM schema_migrations ORDER BY filename ASC')
-      .all()
-      .map((row) => row.filename)
-  );
-
   const migrationFiles = getMigrationFiles();
 
   for (const file of migrationFiles) {
-    if (applied.has(file)) {
-      continue;
-    }
-
-    if (migrationAlreadySatisfied(db, file)) {
-      console.log(`⏭️ Migration already satisfied, marking as applied: ${file}`);
-      markMigrationApplied(db, file);
-      continue;
-    }
-
     const migrationPath = path.join(MIGRATIONS_DIR, file);
     const sql = fs.readFileSync(migrationPath, 'utf8');
 
     console.log(`▶️ Applying migration: ${file}`);
-
-    const transaction = db.transaction(() => {
+    try {
       db.exec(sql);
-      markMigrationApplied(db, file);
-    });
-
-    transaction();
-    console.log(`✅ Migration applied: ${file}`);
+      console.log(`✅ Migration applied: ${file}`);
+    } catch (error) {
+      if (isIgnorableMigrationError(error)) {
+        console.log(`⏭️ Migration skipped: ${file}`);
+        continue;
+      }
+      throw error;
+    }
   }
 }
 
@@ -148,6 +107,7 @@ function initSQLiteDatabase() {
     }
     throw error;
   }
+
   configureDatabase(db);
 
   console.log('📦 Initializing SQLite database...');
